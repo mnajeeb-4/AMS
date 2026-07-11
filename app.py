@@ -91,13 +91,19 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_student_date ON attendance(student_id, date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(date)")
         
-        # >>>>>>> SELF-HEALING SCHEMA PATCH (Adds columns if missing in old DBs) <<<<<<<
+        # >>>>>>> SELF-HEALING SCHEMA PATCH 1.0 (For Users) <<<<<<<
         cursor.execute("PRAGMA table_info(users)")
         existing_columns = [col['name'] for col in cursor.fetchall()]
-        if 'email' not in existing_columns:
-            cursor.execute("ALTER TABLE users ADD COLUMN email TEXT")
-        if 'phone' not in existing_columns:
-            cursor.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+        if 'email' not in existing_columns: cursor.execute("ALTER TABLE users ADD COLUMN email TEXT")
+        if 'phone' not in existing_columns: cursor.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+
+        # >>>>>>> SELF-HEALING SCHEMA PATCH 2.0 (For Attendance - FIXES YOUR ERROR) <<<<<<<
+        cursor.execute("PRAGMA table_info(attendance)")
+        att_columns = [col['name'] for col in cursor.fetchall()]
+        if 'subject_id' not in att_columns: cursor.execute("ALTER TABLE attendance ADD COLUMN subject_id INTEGER DEFAULT 1")
+        if 'mood_score' not in att_columns: cursor.execute("ALTER TABLE attendance ADD COLUMN mood_score INTEGER DEFAULT 3")
+        if 'notes' not in att_columns: cursor.execute("ALTER TABLE attendance ADD COLUMN notes TEXT")
+
         conn.commit()
     except sqlite3.Error as e:
         st.error(f"Database init error: {e}")
@@ -111,20 +117,18 @@ def seed_mock_data():
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        # --- FIX: Quantum Self-Healing Logic for Passwords ---
-        # 1. Ensure Admin exists with correct hash
+        # 1. Admin Self-Healing
         admin_pass = hash_password("admin123")
         cursor.execute("SELECT id, password_hash FROM users WHERE username = 'admin'")
         admin_row = cursor.fetchone()
         if admin_row:
-            # Hash mismatch ho? Turat update karo!
             if admin_row['password_hash'] != admin_pass:
                 cursor.execute("UPDATE users SET password_hash = ? WHERE username = 'admin'", (admin_pass,))
         else:
             cursor.execute("INSERT INTO users (username, password_hash, full_name, role, email) VALUES (?, ?, ?, ?, ?)",
                            ("admin", admin_pass, "System Administrator", "teacher", "admin@university.com"))
 
-        # 2. Ensure Students exist with correct hashes
+        # 2. Students Self-Healing
         students_data = [
             ("student1", "123456", "Arham MH", "arham@test.com"),
             ("student2", "123456", "John Doe", "john@test.com"),
@@ -206,10 +210,8 @@ def ai_predict_risk(conn, student_id: int) -> dict:
             consecutive_absences += 1
         else:
             break
-    if consecutive_absences >= 3 and risk_score < 50:
-        risk_score += 25
-    elif consecutive_absences >= 5:
-        risk_score = 100
+    if consecutive_absences >= 3 and risk_score < 50: risk_score += 25
+    elif consecutive_absences >= 5: risk_score = 100
     risk_score = min(risk_score, 100)
     future_warning = "Low Risk"
     if risk_score > 60: future_warning = "Critical Risk - Immediate Intervention Required"
@@ -218,9 +220,7 @@ def ai_predict_risk(conn, student_id: int) -> dict:
 
 def ai_text_analyzer(notes: str) -> dict:
     notes = notes.lower()
-    status = "Present"
-    alert = ""
-    sentiment = "Neutral"
+    status = "Present"; alert = ""; sentiment = "Neutral"
     if any(k in notes for k in ['sick', 'fever', 'flu', 'covid', 'unwell']):
         status = "Leave"; alert = "AI suggests 'Leave'. You can override it."; sentiment = "Negative"
     elif any(k in notes for k in ['late', 'traffic', 'stuck', 'delay']):
@@ -237,10 +237,8 @@ def ai_chatbot_response(user_input: str, user_role: str, full_name: str, conn) -
             cursor.execute("SELECT COUNT(*) as t, SUM(CASE WHEN status='Present' THEN 1 ELSE 0 END) as p FROM attendance WHERE student_id = ?", (st.session_state.user['id'],))
             d = cursor.fetchone()
             rate = round((d['p'] / d['t']) * 100, 2) if d['t'] > 0 else 0
-            if rate < 30:
-                return f"🚨 **URGENT ALERT, {full_name}!** Your attendance is critically low at **{rate}%**. Please contact your professor immediately."
-            elif rate < 75:
-                return f"⚠️ **Heads up, {full_name}!** Your attendance is at **{rate}%**. Falling behind the 75% passing threshold."
+            if rate < 30: return f"🚨 **URGENT ALERT, {full_name}!** Your attendance is critically low at **{rate}%**. Please contact your professor immediately."
+            elif rate < 75: return f"⚠️ **Heads up, {full_name}!** Your attendance is at **{rate}%**. Falling behind the 75% passing threshold."
             return f"📈 **Hey {full_name}!** You are currently at **{rate}%** attendance. Keep it up!"
         else:
             cursor.execute("SELECT COUNT(*) as total FROM users WHERE role='student'")
@@ -262,16 +260,13 @@ def ai_chatbot_response(user_input: str, user_role: str, full_name: str, conn) -
             critical_risk = []
             for s in students:
                 r = ai_predict_risk(conn, s['id'])
-                if r['risk'] > 60:
-                    critical_risk.append(s['full_name'])
+                if r['risk'] > 60: critical_risk.append(s['full_name'])
             return f"⚠️ **Critical Risk Students**: {', '.join(critical_risk) if critical_risk else 'None detected. The class is doing well!'}"
         else:
             r = ai_predict_risk(conn, st.session_state.user['id'])
             return f"🧠 **Personal AI Risk Score**: **{r['risk']}%** risk of probation. Status: **{r['warning']}**."
-    elif "leave" in user_input:
-        return "📝 Navigate to the **'Leave Request'** tab and fill out the form."
-    elif "hello" in user_input or "hi" in user_input:
-        return f"👋 Welcome, **{full_name}**! I am your Academic AI."
+    elif "leave" in user_input: return "📝 Navigate to the **'Leave Request'** tab and fill out the form."
+    elif "hello" in user_input or "hi" in user_input: return f"👋 Welcome, **{full_name}**! I am your Academic AI."
     return "🤖 I'm optimizing. Ask about 'attendance', 'risk', or 'leave'."
 
 # --- UI HELPER (Cyber-Classic Glassmorphism 2.0) ---
@@ -311,15 +306,13 @@ def student_tab_checkin(student_id: int, student_name: str):
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT status FROM attendance WHERE student_id = ? AND date = ?", (student_id, today))
-        if cursor.fetchone():
-            st.warning("⚠️ Neural signature already logged for today.")
-            return
+        if cursor.fetchone(): st.warning("⚠️ Neural signature already logged for today."); return
     finally: conn.close()
     col1, col2 = st.columns([2, 1])
     with col1:
         st.markdown('<div class="glass-card" style="background: rgba(0, 15, 30, 0.4); border: 1px solid rgba(0, 255, 255, 0.2);">', unsafe_allow_html=True)
         st.markdown("#### 🧠 AI Emotional & Status Analysis")
-        notes = st.text_area("Describe your condition (Cognitive Input)", placeholder="High fever, Traffic delay...", height=80)
+        notes = st.text_area("Describe your condition", placeholder="High fever, Traffic delay...", height=80)
         ai_suggestion = ai_text_analyzer(notes) if notes else {"status": "Present", "alert": "", "sentiment": "Neutral"}
         if ai_suggestion['alert']: st.info(f"🤖 AI Suggestion: {ai_suggestion['alert']}")
         final_status = st.selectbox("Confirm Neural Signature", ["Present", "Absent", "Leave"], index=["Present", "Absent", "Leave"].index(ai_suggestion['status']))
@@ -352,17 +345,14 @@ def student_tab_offline():
         if st.button("🔄 Initiate Data Sync", type="primary") and pending > 0:
             progress_bar = st.progress(0, text="Establishing Quantum Link...")
             for i in range(100):
-                time.sleep(0.01)
-                progress_bar.progress(i + 1, text=f"Syncing {i+1}%...")
+                time.sleep(0.01); progress_bar.progress(i + 1, text=f"Syncing {i+1}%...")
             conn = get_db_connection()
             try:
                 cursor = conn.cursor()
                 cursor.executemany("INSERT INTO attendance (student_id, date, status, timestamp, notes, mood_score) VALUES (?, ?, ?, ?, ?, ?)",
                                    [(r['student_id'], r['date'], r['status'], r['timestamp'], r.get('notes', ''), r.get('mood_score', 3)) for r in st.session_state.offline_cache])
-                conn.commit()
-                st.session_state.offline_cache = []
-                st.success("✅ **Synced!** All records uploaded.")
-                st.rerun()
+                conn.commit(); st.session_state.offline_cache = []
+                st.success("✅ **Synced!** All records uploaded."); st.rerun()
             finally: conn.close()
     else:
         if len(st.session_state.offline_cache) > 0: st.warning("⚠️ Offline cache detected! Enable Offline Mode and sync.")
@@ -371,15 +361,13 @@ def student_tab_ai_chatbot(student_id: int):
     st.markdown('<div class="holographic-header">🤖 AI Campus Assistant</div>', unsafe_allow_html=True)
     if "messages" not in st.session_state: st.session_state.messages = []
     conn = get_db_connection()
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]): st.markdown(message["content"])
+    for message in st.session_state.messages: st.chat_message(message["role"]).markdown(message["content"])
     if prompt := st.chat_input("Ask the AI Core..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"): st.markdown(prompt)
         with st.chat_message("assistant"):
             response = ai_chatbot_response(prompt, "student", st.session_state.user['full_name'], conn)
-            st.markdown(response)
-            st.session_state.messages.append({"role": "assistant", "content": response})
+            st.markdown(response); st.session_state.messages.append({"role": "assistant", "content": response})
     conn.close()
 
 def student_tab_leave_requests(student_id: int):
@@ -490,7 +478,6 @@ def teacher_tab_crud():
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        # FIX: Removed 'email' to prevent column error on old DBs
         cursor.execute("SELECT id, full_name, username FROM users WHERE role = 'student'")
         students = cursor.fetchall()
         with st.expander("➕ Add New Student", expanded=True):
@@ -549,15 +536,13 @@ def teacher_tab_ai_chatbot():
     st.markdown('<div class="holographic-header">🤖 AI Faculty Co-Pilot</div>', unsafe_allow_html=True)
     if "teacher_messages" not in st.session_state: st.session_state.teacher_messages = []
     conn = get_db_connection()
-    for m in st.session_state.teacher_messages:
-        with st.chat_message(m["role"]): st.markdown(m["content"])
+    for m in st.session_state.teacher_messages: st.chat_message(m["role"]).markdown(m["content"])
     if prompt := st.chat_input("Query the Core..."):
         st.session_state.teacher_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"): st.markdown(prompt)
         with st.chat_message("assistant"):
             resp = ai_chatbot_response(prompt, "teacher", st.session_state.user['full_name'], conn)
-            st.markdown(resp)
-            st.session_state.teacher_messages.append({"role": "assistant", "content": resp})
+            st.markdown(resp); st.session_state.teacher_messages.append({"role": "assistant", "content": resp})
     conn.close()
 
 def teacher_tab_subject_management():
@@ -586,14 +571,16 @@ def main():
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap');
         html, body, [class*="css"] { font-family: 'Inter', sans-serif; background-color: #0a0a0f; color: #e0e0e0; }
         .main .block-container { padding: 2rem 2rem; background: rgba(10, 10, 15, 0.5); }
+        
         section[data-testid="stSidebar"] {
             background: rgba(15, 15, 20, 0.85);
             backdrop-filter: blur(16px) saturate(180%);
             -webkit-backdrop-filter: blur(16px);
-            border-right: 1px solid rgba(0, 255, 255, 0.1);
-            box-shadow: inset -10px 0 20px rgba(0,0,0,0.5);
+            border-right: 1px solid rgba(0, 255, 255, 0.2);
+            box-shadow: inset -10px 0 30px rgba(0,0,0,0.5);
         }
         section[data-testid="stSidebar"] .stMarkdown { color: #e0e0e0; }
+        
         .glass-card {
             background: rgba(255, 255, 255, 0.04);
             backdrop-filter: blur(16px) saturate(150%);
@@ -601,23 +588,32 @@ def main():
             padding: 1.5rem;
             border: 1px solid rgba(255, 255, 255, 0.06);
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.37);
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
             margin-bottom: 1.5rem;
+            animation: fadeInUp 0.6s ease-out forwards;
         }
         .glass-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 32px rgba(0, 255, 255, 0.08), 0 8px 32px rgba(0, 0, 0, 0.37);
-            border-color: rgba(0, 255, 255, 0.2);
+            transform: translateY(-5px) scale(1.01);
+            box-shadow: 0 8px 32px rgba(0, 255, 255, 0.15), 0 8px 32px rgba(0, 0, 0, 0.37);
+            border-color: rgba(0, 255, 255, 0.3);
         }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
         .cyber-metric-value { font-size: 2.5rem; font-weight: 800; background: -webkit-linear-gradient(135deg, #00ffcc, #0066ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
         .cyber-metric-label { font-size: 1rem; color: #8a8a9a; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-top: -0.2rem;}
         .cyber-metric-sub { font-size: 0.8rem; color: #4a4a5a; margin-top: 0.5rem; }
+        
         .holographic-header {
             font-weight: 700; font-size: 2rem; margin-bottom: 1rem;
             background: -webkit-linear-gradient(135deg, #00ffcc 0%, #b44aff 100%);
             -webkit-background-clip: text; -webkit-text-fill-color: transparent;
             text-shadow: 0 0 15px rgba(0, 255, 255, 0.1);
         }
+        
         .stButton > button {
             background: rgba(0, 255, 255, 0.1); color: #00ffcc; border: 1px solid rgba(0, 255, 255, 0.3);
             padding: 0.6rem 2rem; border-radius: 50px; font-weight: 600;
@@ -626,14 +622,34 @@ def main():
         }
         .stButton > button:hover {
             background: rgba(0, 255, 255, 0.3); color: #fff; border: 1px solid #00ffcc;
-            transform: translateY(-2px); box-shadow: 0 0 25px rgba(0, 255, 255, 0.3);
+            transform: translateY(-2px); box-shadow: 0 0 30px rgba(0, 255, 255, 0.4);
         }
+        
+        .stTextInput input {
+            border-radius: 12px !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            transition: all 0.2s ease;
+        }
+        .stTextInput input:focus {
+            border-color: #00ffcc !important;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.2) !important;
+        }
+        
+        /* Login Screen Specific */
+        .login-glass-card {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-radius: 24px;
+            padding: 2.5rem;
+            border: 1px solid rgba(0, 255, 255, 0.15);
+            box-shadow: 0 0 60px rgba(0, 255, 255, 0.05);
+            animation: fadeInUp 0.8s cubic-bezier(0.25, 0.8, 0.25, 1);
+        }
+        
         .cyber-grid-container {
-            overflow-x: auto;
-            display: block;
-            border-radius: 16px;
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            background: rgba(0, 0, 0, 0.2);
+            overflow-x: auto; display: block; border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.05); background: rgba(0, 0, 0, 0.2);
         }
         .cyber-grid-container [data-testid="stDataFrame"] { border: none; }
         .cyber-grid-container::-webkit-scrollbar { height: 8px; }
@@ -649,9 +665,9 @@ def main():
 
     if st.session_state.user is None:
         st.markdown("""
-        <div style="text-align: center; padding: 3rem; margin: auto; max-width: 500px; background: rgba(255, 255, 255, 0.02); border-radius: 24px; backdrop-filter: blur(12px); border: 1px solid rgba(0, 255, 255, 0.1);">
-            <h1 style="background: -webkit-linear-gradient(45deg, #00ffcc, #b44aff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800;">🧠 NEURAL AMS</h1>
-            <p style="color: #6B7280; margin-bottom: 2rem;">Quantum University Management Core</p>
+        <div class="login-glass-card" style="text-align: center; padding: 3rem; margin: auto; max-width: 500px;">
+            <h1 style="background: -webkit-linear-gradient(45deg, #00ffcc, #b44aff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800; font-size: 2.5rem; margin-bottom: 0.5rem;">🧠 NEURAL AMS</h1>
+            <p style="color: #9CA3AF; margin-bottom: 2rem; font-size: 0.9rem; letter-spacing: 0.5px;">Quantum University Management Core</p>
         """, unsafe_allow_html=True)
         with st.container():
             with st.form("login"):
