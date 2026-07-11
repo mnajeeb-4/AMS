@@ -565,7 +565,7 @@ def teacher_tab_subject_management():
 
 # --- Main Application Core ---
 def main():
-    st.set_page_config(layout="wide", page_title="NEURAL AMS", page_icon="🧠")
+    st.set_page_config(layout="wide", page_title="ATTENDENCE MANAGEMENT", page_icon="🧠")
     st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap');
