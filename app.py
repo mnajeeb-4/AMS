@@ -565,7 +565,7 @@ def teacher_tab_subject_management():
 
 # --- Main Application Core ---
 def main():
-    st.set_page_config(layout="wide", page_title="ATTENDENCE MANAGEMENT", page_icon="🧠")
+    st.set_page_config(layout="wide", page_title="ATTENDANCE MANGEMENT", page_icon="🎓")
     st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap');
@@ -666,8 +666,8 @@ def main():
     if st.session_state.user is None:
         st.markdown("""
         <div class="login-glass-card" style="text-align: center; padding: 3rem; margin: auto; max-width: 500px;">
-            <h1 style="background: -webkit-linear-gradient(45deg, #00ffcc, #b44aff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800; font-size: 2.5rem; margin-bottom: 0.5rem;">🧠 NEURAL AMS</h1>
-            <p style="color: #9CA3AF; margin-bottom: 2rem; font-size: 0.9rem; letter-spacing: 0.5px;">Quantum University Management Core</p>
+            <h1 style="background: -webkit-linear-gradient(45deg, #00ffcc, #b44aff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800; font-size: 2.5rem; margin-bottom: 0.5rem;">🧠 ATTENDANCE MANGEMENT SYSTEM</h1>
+            <p style="color: #9CA3AF; margin-bottom: 2rem; font-size: 0.9rem; letter-spacing: 0.5px;">ATTENDANCE Management SYSTEM" Core</p>
         """, unsafe_allow_html=True)
         with st.container():
             with st.form("login"):
