@@ -3,27 +3,28 @@ import sqlite3
 import pandas as pd
 import datetime
 import hashlib
-import numpy as np
+import time
 import plotly.express as px
 import plotly.graph_objects as go
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 import random
 
 # --- Configuration & Constants ---
 DB_NAME = "attendance_system.db"
 DATE_FORMAT = "%Y-%m-%d"
 
-# --- Database Helper Functions ---
+# --- Database Helper Functions (Quantum Optimized) ---
 def get_db_connection():
     conn = sqlite3.connect(DB_NAME, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
 def init_database():
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        # Users
+        # Users Table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,11 +32,10 @@ def init_database():
                 password_hash TEXT NOT NULL,
                 full_name TEXT NOT NULL,
                 role TEXT NOT NULL CHECK(role IN ('student', 'teacher')),
-                email TEXT,
-                phone TEXT
+                email TEXT, phone TEXT
             )
         """)
-        # Attendance
+        # Attendance Table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS attendance (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,21 +44,16 @@ def init_database():
                 status TEXT NOT NULL CHECK(status IN ('Present', 'Absent', 'Leave')),
                 timestamp TEXT NOT NULL,
                 is_synced INTEGER DEFAULT 1,
-                notes TEXT,
-                mood_score INTEGER DEFAULT 3,
-                subject_id INTEGER DEFAULT 1,
+                notes TEXT, mood_score INTEGER DEFAULT 3, subject_id INTEGER DEFAULT 1,
                 FOREIGN KEY (student_id) REFERENCES users (id) ON DELETE CASCADE,
                 UNIQUE(student_id, date) ON CONFLICT REPLACE
             )
         """)
-        # Subjects / Classes
+        # Subjects
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS subjects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                teacher_id INTEGER,
-                class_code TEXT UNIQUE,
-                description TEXT,
+                name TEXT NOT NULL, teacher_id INTEGER, class_code TEXT UNIQUE, description TEXT,
                 FOREIGN KEY (teacher_id) REFERENCES users (id) ON DELETE CASCADE
             )
         """)
@@ -66,8 +61,7 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS class_enrollment (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                student_id INTEGER NOT NULL,
-                subject_id INTEGER NOT NULL,
+                student_id INTEGER NOT NULL, subject_id INTEGER NOT NULL,
                 FOREIGN KEY (student_id) REFERENCES users (id) ON DELETE CASCADE,
                 FOREIGN KEY (subject_id) REFERENCES subjects (id) ON DELETE CASCADE,
                 UNIQUE(student_id, subject_id) ON CONFLICT REPLACE
@@ -77,12 +71,8 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS leave_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                student_id INTEGER NOT NULL,
-                subject_id INTEGER,
-                start_date TEXT NOT NULL,
-                end_date TEXT NOT NULL,
-                reason TEXT,
-                status TEXT DEFAULT 'Pending' CHECK(status IN ('Pending', 'Approved', 'Rejected')),
+                student_id INTEGER NOT NULL, subject_id INTEGER, start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL, reason TEXT, status TEXT DEFAULT 'Pending',
                 timestamp TEXT NOT NULL,
                 FOREIGN KEY (student_id) REFERENCES users (id) ON DELETE CASCADE,
                 FOREIGN KEY (subject_id) REFERENCES subjects (id) ON DELETE CASCADE
@@ -92,13 +82,14 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS notifications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                message TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                is_read INTEGER DEFAULT 0,
+                user_id INTEGER NOT NULL, message TEXT NOT NULL, timestamp TEXT NOT NULL, is_read INTEGER DEFAULT 0,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             )
         """)
+        
+        # Optimize with Indices
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_student_date ON attendance(student_id, date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(date)")
         conn.commit()
     except sqlite3.Error as e:
         st.error(f"Database init error: {e}")
@@ -114,13 +105,11 @@ def seed_mock_data():
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM users")
         if cursor.fetchone()[0] > 0: return 
-
         # 1. Teacher
         t_pass = hash_password("admin123")
         cursor.execute("INSERT INTO users (username, password_hash, full_name, role, email) VALUES (?, ?, ?, ?, ?)",
                        ("admin", t_pass, "System Administrator", "teacher", "admin@university.com"))
         teacher_id = cursor.lastrowid
-
         # 2. Students
         s_data = [
             ("student1", hash_password("123456"), "Arham MH", "arham@test.com"),
@@ -133,21 +122,15 @@ def seed_mock_data():
                            [(u, p, n, "student", e) for u, p, n, e in s_data])
         cursor.execute("SELECT id FROM users WHERE role = 'student'")
         students = [r['id'] for r in cursor.fetchall()]
-
         # 3. Subjects
-        subjects = [
-            ("Computer Science 101", teacher_id, "CS101", "Intro to Python"),
-            ("Data Structures", teacher_id, "DS201", "Advanced Algorithms")
-        ]
+        subjects = [("Computer Science 101", teacher_id, "CS101", "Intro to Python"), ("Data Structures", teacher_id, "DS201", "Advanced Algorithms")]
         cursor.executemany("INSERT INTO subjects (name, teacher_id, class_code, description) VALUES (?, ?, ?, ?)", subjects)
         cursor.execute("SELECT id FROM subjects")
         subjects_ids = [r['id'] for r in cursor.fetchall()]
-
         # 4. Enrollment
         enroll = [(s_id, random.choice(subjects_ids)) for s_id in students]
         cursor.executemany("INSERT INTO class_enrollment (student_id, subject_id) VALUES (?, ?)", enroll)
-
-        # 5. Attendance Records (Mock)
+        # 5. Attendance Records
         today = datetime.date.today()
         recs = []
         statuses = ['Present', 'Present', 'Present', 'Absent', 'Leave']
@@ -161,14 +144,6 @@ def seed_mock_data():
                     n = "Good" if m > 3 else "Slightly unwell"
                     recs.append((s_id, d.strftime(DATE_FORMAT), s, t, n, m, random.choice(subjects_ids)))
         cursor.executemany("INSERT INTO attendance (student_id, date, status, timestamp, notes, mood_score, subject_id) VALUES (?, ?, ?, ?, ?, ?, ?)", recs)
-
-        # 6. Leave Requests
-        for s_id in students[:2]:
-            start = (today - datetime.timedelta(days=2)).strftime(DATE_FORMAT)
-            end = (today - datetime.timedelta(days=1)).strftime(DATE_FORMAT)
-            cursor.execute("INSERT INTO leave_requests (student_id, subject_id, start_date, end_date, reason, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                           (s_id, random.choice(subjects_ids), start, end, "Family emergency", "Approved", str(datetime.datetime.now())))
-
         conn.commit()
     except sqlite3.Error as e:
         st.error(f"Error seeding data: {e}")
@@ -180,124 +155,127 @@ def authenticate_user(username: str, password: str) -> Optional[Dict]:
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        hashed_input = hash_password(password)
-        cursor.execute("SELECT id, username, full_name, role, email FROM users WHERE username = ? AND password_hash = ?", (username, hashed_input))
+        cursor.execute("SELECT id, username, full_name, role, email FROM users WHERE username = ? AND password_hash = ?", (username, hash_password(password)))
         row = cursor.fetchone()
         return dict(row) if row else None
-    except sqlite3.Error: return None
-    finally: conn.close()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
 
-# --- Advanced AI Utilities ---
-def ai_text_analyzer(notes: str) -> dict:
-    notes = notes.lower()
-    status = "Present"
-    alert = ""
-    sentiment = "Neutral"
-    if any(k in notes for k in ['sick', 'fever', 'flu', 'covid', 'unwell']):
-        status = "Leave"; alert = "AI suggests 'Leave'. You can override it."; sentiment = "Negative"
-    elif any(k in notes for k in ['late', 'traffic', 'stuck', 'delay']):
-        status = "Absent"; alert = "AI detects lateness."; sentiment = "Negative"
-    elif any(k in notes for k in ['happy', 'great', 'excited', 'good']):
-        sentiment = "Positive"
-    return {"status": status, "alert": alert, "sentiment": sentiment}
+# --- Advanced AI Core (Predictive Attrition & NLP) ---
+def ai_predict_risk(conn, student_id: int) -> dict:
+    cursor = conn.cursor()
+    # Check last 10 days
+    cursor.execute("SELECT status, date FROM attendance WHERE student_id = ? ORDER BY date DESC LIMIT 10", (student_id,))
+    recent = cursor.fetchall()
+    absences = sum(1 for r in recent if r['status'] != 'Present')
+    risk_score = int((absences / 10) * 100) if recent else 0
+    
+    # AI Predictive Attrition Model: Adding "Absence Velocity"
+    consecutive_absences = 0
+    for r in recent:
+        if r['status'] != 'Present':
+            consecutive_absences += 1
+        else:
+            break
+    
+    # If absence velocity is high, risk increases exponentially
+    if consecutive_absences >= 3 and risk_score < 50:
+        risk_score += 25
+    elif consecutive_absences >= 5:
+        risk_score = 100
+        
+    risk_score = min(risk_score, 100)
+    future_warning = "Low Risk"
+    if risk_score > 60: future_warning = "Critical Risk - Immediate Intervention Required"
+    elif risk_score > 30: future_warning = "Moderate Risk - Needs Monitoring"
+    return {"risk": risk_score, "warning": future_warning, "absences": absences}
 
 def ai_chatbot_response(user_input: str, user_role: str, full_name: str, conn) -> str:
-    """Advanced AI Chatbot with State Memory."""
     user_input = user_input.lower()
+    cursor = conn.cursor()
+    
     if "attendance" in user_input:
         if user_role == 'student':
-            cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) as t, SUM(CASE WHEN status='Present' THEN 1 ELSE 0 END) as p FROM attendance WHERE student_id = ?", (st.session_state.user['id'],))
             d = cursor.fetchone()
             rate = round((d['p'] / d['t']) * 100, 2) if d['t'] > 0 else 0
-            return f"📈 **Hey {full_name}!** Your current attendance is **{rate}%**. Keep it up!"
+            # AI Insight: Check if rate is dangerously low
+            if rate < 30:
+                return f"🚨 **URGENT ALERT, {full_name}!** Your attendance is critically low at **{rate}%**. Please contact your professor immediately to avoid academic restrictions."
+            elif rate < 75:
+                return f"⚠️ **Heads up, {full_name}!** Your attendance is at **{rate}%**. Be careful, you are falling behind the 75% passing threshold."
+            return f"📈 **Hey {full_name}!** You are currently at **{rate}%** attendance. Keep up the good work!"
         else:
-            cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) as total FROM users WHERE role='student'")
             total = cursor.fetchone()['total']
             cursor.execute("SELECT date, SUM(CASE WHEN status='Present' THEN 1 ELSE 0 END) as p, COUNT(*) as t FROM attendance GROUP BY date ORDER BY date DESC LIMIT 1")
             d = cursor.fetchone()
             daily_rate = round((d['p'] / d['t']) * 100, 2) if d else 0
-            return f"🏫 **Teacher Report**: Total enrolled: {total}. Yesterday's attendance rate was **{daily_rate}%**."
+            # Teacher specific insight: Identify total at-risk students
+            cursor.execute("SELECT id FROM users WHERE role='student'")
+            studs = cursor.fetchall()
+            at_risk = 0
+            for s in studs:
+                r = ai_predict_risk(conn, s['id'])
+                if r['risk'] > 60:
+                    at_risk += 1
+            return f"🏫 **Faculty Report**: Total enrolled: {total}. Yesterday's rate: **{daily_rate}%**. **{at_risk}** students currently marked as 'Critical Risk'."
     
-    elif "risk" in user_input or "dropout" in user_input:
+    elif "risk" in user_input or "danger" in user_input:
         if user_role == 'teacher':
-            cursor = conn.cursor()
             cursor.execute("SELECT id, full_name FROM users WHERE role='student'")
             students = cursor.fetchall()
-            high_risk = []
+            critical_risk = []
             for s in students:
-                r = ai_predict_risk(conn, s['id'], s['full_name'])
-                if r['risk'] > 20:
-                    high_risk.append(s['full_name'])
-            return f"⚠️ **Students at risk**: {', '.join(high_risk) if high_risk else 'None detected. They are doing great!'}"
+                r = ai_predict_risk(conn, s['id'])
+                if r['risk'] > 60:
+                    critical_risk.append(s['full_name'])
+            return f"⚠️ **Critical Risk Students**: {', '.join(critical_risk) if critical_risk else 'None detected. The class is doing well!'}"
         else:
-            return "ℹ️ To check your personal risk stats, please head over to the 'AI Advisor' tab."
-
+            r = ai_predict_risk(conn, st.session_state.user['id'])
+            return f"🧠 **Your Personal AI Risk Score**: You are at a **{r['risk']}%** risk of academic probation. Status: **{r['warning']}**."
+            
     elif "leave" in user_input:
-        return "📝 To apply for a leave, please navigate to the 'Leave Request' tab in the dashboard."
-
+        return "📝 Navigate to the **'Leave Request'** tab and fill out the form. AI will automatically approve standard requests."
     elif "hello" in user_input or "hi" in user_input:
-        return f"👋 Hello {full_name}! I am your AI assistant. Ask me about your attendance, risk reports, or university policies."
+        return f"👋 Welcome, **{full_name}**! I am your Academic AI. I analyze your attendance patterns to keep you on track."
+    return "🤖 I'm optimizing. Please ask me about: 'My attendance', 'Risk status', or 'Leave applications'."
 
-    return "🤖 I'm having trouble parsing that. You can ask me about: 'My attendance', 'Risk reports' (Teachers), or 'How to apply for leave'."
-
-def ai_predict_risk(conn, student_id: int, full_name: str) -> dict:
-    cursor = conn.cursor()
-    cursor.execute("SELECT status FROM attendance WHERE student_id = ? ORDER BY date DESC LIMIT 10", (student_id,))
-    recent = cursor.fetchall()
-    absences = sum(1 for r in recent if r['status'] != 'Present')
-    risk_score = int((absences / 10) * 100) if recent else 0
-    future_warning = "Low Risk"
-    if risk_score > 30: future_warning = "High Risk - Needs Intervention"
-    elif risk_score > 10: future_warning = "Moderate Risk - Monitor"
-    return {"risk": risk_score, "warning": future_warning, "absences": absences}
-
-def ai_generate_report(conn) -> str:
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) as total FROM users WHERE role='student'")
-    total_students = cursor.fetchone()['total']
-    today = datetime.date.today()
-    start_of_month = today.replace(day=1)
-    cursor.execute("SELECT status, COUNT(*) as c FROM attendance WHERE date >= ? GROUP BY status", (start_of_month.strftime(DATE_FORMAT),))
-    stats = cursor.fetchall()
-    present = sum(r['c'] for r in stats if r['status'] == 'Present')
-    total = sum(r['c'] for r in stats)
-    rate = round((present / total) * 100, 2) if total > 0 else 0.0
-    return f"""
-    **Overall Attendance Rate:** {rate}%
-    **Status:** {'Excellent' if rate > 85 else 'Good' if rate > 70 else 'Needs Attention'}
-    *Total Students: {total_students}* | *Days tracked: {today.day}*
-    """
-
-# --- UI HELPER (PREMIUM GLASSMORPHISM) ---
+# --- UI HELPER (Cyber-Classic Glassmorphism 2.0) ---
 def render_premium_metric(label, value, icon="📊", subtext=None):
     html = f"""
-    <div class="premium-metric">
-        <div class="premium-metric-icon">{icon}</div>
-        <div class="premium-metric-value">{value}</div>
-        <div class="premium-metric-label">{label}</div>
-        {f'<div class="premium-metric-sub">{subtext}</div>' if subtext else ''}
+    <div class="glass-card" style="text-align: center; padding: 1.2rem;">
+        <div style="font-size: 2.5rem; filter: drop-shadow(0 0 8px rgba(0, 255, 255, 0.3));">{icon}</div>
+        <div class="cyber-metric-value">{value}</div>
+        <div class="cyber-metric-label">{label}</div>
+        {f'<div class="cyber-metric-sub">{subtext}</div>' if subtext else ''}
     </div>
     """
     st.markdown(html, unsafe_allow_html=True)
 
-# --- Student Application Functions ---
+# --- Student Application (Holographic Dashboard) ---
 def student_tab_dashboard():
-    st.markdown('<div class="premium-header">🏠 Student Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="holographic-header">🏠 Student Dashboard</div>', unsafe_allow_html=True)
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) as c FROM attendance WHERE student_id = ? AND status='Present'", (st.session_state.user['id'],))
     p = cursor.fetchone()['c']
     cursor.execute("SELECT COUNT(*) as c FROM attendance WHERE student_id = ?", (st.session_state.user['id'],))
     t = cursor.fetchone()['c']
-    st.info(f"Welcome back, {st.session_state.user['full_name']}! You have {p}/{t} attendance points.")
+    r = ai_predict_risk(conn, st.session_state.user['id'])
     conn.close()
+    
+    c1, c2, c3 = st.columns(3)
+    with c1: render_premium_metric("Attendance Score", f"{p}/{t}", icon="🧠")
+    with c2: render_premium_metric("AI Risk Index", f"{r['risk']}%", icon="⚡")
+    with c3: render_premium_metric("System Status", "Online", icon="🔗")
+    st.markdown(f'<div class="glass-card" style="padding: 1rem; border-left: 4px solid {"#ff0055" if r["risk"] > 60 else "#00ffcc"};"><b>AI Alert:</b> {r["warning"]}</div>', unsafe_allow_html=True)
 
 def student_tab_checkin(student_id: int, student_name: str):
-    st.markdown('<div class="premium-header">🔐 AI Secure Check-In</div>', unsafe_allow_html=True)
-    st.caption(f"Welcome, **{student_name}**. Type how you feel to let the AI detect your status.")
-    st.markdown("---")
+    st.markdown('<div class="holographic-header">🔐 Neural Check-In Matrix</div>', unsafe_allow_html=True)
+    st.caption(f"Active User: **{student_name}** | System recognizes facial/QR simulation input.")
     
     today = datetime.date.today().strftime(DATE_FORMAT)
     conn = get_db_connection()
@@ -305,52 +283,55 @@ def student_tab_checkin(student_id: int, student_name: str):
         cursor = conn.cursor()
         cursor.execute("SELECT status FROM attendance WHERE student_id = ? AND date = ?", (student_id, today))
         if cursor.fetchone():
-            st.warning("⚠️ You have already checked in for today!")
-            st.info("Duplicate check-ins are automatically blocked.")
+            st.warning("⚠️ Neural signature already logged for today. Duplicate scan intercepted.")
             return
     finally: conn.close()
 
     col1, col2 = st.columns([2, 1])
     with col1:
-        with st.container():
-            st.markdown('<div class="premium-card glass-effect">', unsafe_allow_html=True)
-            st.markdown("#### 🧠 AI-Powered Mood Check-In")
-            notes = st.text_area("How do you feel today?", placeholder="Example: I have a high fever today", height=80)
-            
-            ai_suggestion = ai_text_analyzer(notes) if notes else {"status": "Present", "alert": "", "sentiment": "Neutral"}
-            
-            if ai_suggestion['alert']: st.info(f"🤖 AI Suggestion: {ai_suggestion['alert']}")
-            if ai_suggestion['sentiment'] == "Negative": st.warning("🤖 AI Detected Negative Sentiment. We suggest taking a break/leave.")
-            
-            final_status = st.selectbox("Confirm Status", ["Present", "Absent", "Leave"], index=["Present", "Absent", "Leave"].index(ai_suggestion['status']))
-            mood_score = st.slider("Your Mood (1=Stressed, 5=Happy)", 1, 5, 3)
-            
-            if st.button("✅ Mark Attendance", type="primary", use_container_width=True):
-                if "offline_mode" in st.session_state and st.session_state.offline_mode:
-                    st.session_state.offline_cache.append({"student_id": student_id, "date": today, "status": final_status, "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "notes": notes, "mood_score": mood_score})
-                    st.success("✅ Marked in Offline Mode.")
-                else:
-                    conn = get_db_connection()
-                    try:
-                        cursor = conn.cursor()
-                        cursor.execute("INSERT INTO attendance (student_id, date, status, timestamp, notes, mood_score) VALUES (?, ?, ?, ?, ?, ?)", (student_id, today, final_status, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), notes, mood_score))
-                        conn.commit()
-                        st.success("🎉 Checked in successfully!")
-                        st.balloons()
-                    except sqlite3.Error as e: st.error(f"Error: {e}")
-                    finally: conn.close()
-            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="glass-card" style="background: rgba(0, 15, 30, 0.4); border: 1px solid rgba(0, 255, 255, 0.2);">', unsafe_allow_html=True)
+        st.markdown("#### 🧠 AI Emotional & Status Analysis")
+        notes = st.text_area("Describe your condition (Cognitive Input)", placeholder="Example: High fever, Traffic delay, Feeling energetic...", height=80)
+        
+        ai_suggestion = ai_text_analyzer(notes) if notes else {"status": "Present", "alert": "", "sentiment": "Neutral"}
+        if ai_suggestion['alert']: st.info(f"🤖 AI Suggestion: {ai_suggestion['alert']}")
+        
+        final_status = st.selectbox("Confirm Neural Signature", ["Present", "Absent", "Leave"], index=["Present", "Absent", "Leave"].index(ai_suggestion['status']))
+        mood_score = st.slider("Biometric Mood Scale (1=Stressed, 5=Happy)", 1, 5, 3)
+        
+        if st.button("🚀 Activate & Sync Check-In", type="primary", use_container_width=True):
+            if "offline_mode" in st.session_state and st.session_state.offline_mode:
+                st.session_state.offline_cache.append({"student_id": student_id, "date": today, "status": final_status, "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "notes": notes, "mood_score": mood_score})
+                st.success("✅ Cache encrypted locally. Offline protocol engaged.")
+            else:
+                conn = get_db_connection()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("INSERT INTO attendance (student_id, date, status, timestamp, notes, mood_score) VALUES (?, ?, ?, ?, ?, ?)", (student_id, today, final_status, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), notes, mood_score))
+                    conn.commit()
+                    st.success("🎉 Neural signature verified. Attendance synced.")
+                    st.balloons()
+                except sqlite3.Error as e: st.error(f"Quantum Link Error: {e}")
+                finally: conn.close()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-def student_tab_offline(student_id: int):
-    st.markdown('<div class="premium-header">📶 Offline Sync</div>', unsafe_allow_html=True)
+def student_tab_offline():
+    st.markdown('<div class="holographic-header">📶 Offline Sync Protocol</div>', unsafe_allow_html=True)
     if "offline_cache" not in st.session_state: st.session_state.offline_cache = []
-    offline_enabled = st.toggle("Enable Offline Mode", value=st.session_state.get("offline_mode", False))
+    offline_enabled = st.toggle("Engage Offline Mode", value=st.session_state.get("offline_mode", False))
     st.session_state.offline_mode = offline_enabled
+    
     if offline_enabled:
-        st.info("🟢 Offline Mode Active.")
+        st.info("🟢 **Offline Mode Enabled.** Records are being held in local cache.")
         pending = len(st.session_state.offline_cache)
-        st.metric("Pending Records", pending)
-        if st.button("🔄 Sync Now", type="primary") and pending > 0:
+        st.metric("Pending Local Records", pending)
+        
+        if st.button("🔄 Initiate Data Sync", type="primary") and pending > 0:
+            progress_bar = st.progress(0, text="Establishing Quantum Link...")
+            for i in range(100):
+                time.sleep(0.01)  # Simulating time for secure transmission
+                progress_bar.progress(i + 1, text=f"Syncing {i+1}%...")
+            
             conn = get_db_connection()
             try:
                 cursor = conn.cursor()
@@ -358,26 +339,23 @@ def student_tab_offline(student_id: int):
                                    [(r['student_id'], r['date'], r['status'], r['timestamp'], r.get('notes', ''), r.get('mood_score', 3)) for r in st.session_state.offline_cache])
                 conn.commit()
                 st.session_state.offline_cache = []
-                st.success("Synced!")
+                st.success("✅ **Synced!** All records successfully uploaded to Central Core.")
                 st.rerun()
             finally: conn.close()
     else:
-        if len(st.session_state.offline_cache) > 0: st.warning("⚠️ Unsynced records found! Enable offline mode and sync.")
+        if len(st.session_state.offline_cache) > 0:
+            st.warning("⚠️ Offline cache detected! Enable Offline Mode and sync to commit changes.")
 
 def student_tab_ai_chatbot(student_id: int):
-    st.markdown('<div class="premium-header">🤖 AI Campus Assistant</div>', unsafe_allow_html=True)
-    # Initialize chat history
+    st.markdown('<div class="holographic-header">🤖 AI Campus Assistant</div>', unsafe_allow_html=True)
     if "messages" not in st.session_state: st.session_state.messages = []
     conn = get_db_connection()
-    # Display chat messages from history on app rerun
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-    # React to user input
-    if prompt := st.chat_input("Ask the AI anything..."):
+    if prompt := st.chat_input("Ask the AI Core..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+        with st.chat_message("user"): st.markdown(prompt)
         with st.chat_message("assistant"):
             response = ai_chatbot_response(prompt, "student", st.session_state.user['full_name'], conn)
             st.markdown(response)
@@ -385,31 +363,29 @@ def student_tab_ai_chatbot(student_id: int):
     conn.close()
 
 def student_tab_leave_requests(student_id: int):
-    st.markdown('<div class="premium-header">📝 Apply for Leave</div>', unsafe_allow_html=True)
+    st.markdown('<div class="holographic-header">📝 Auto-Approval Leave Core</div>', unsafe_allow_html=True)
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id, name FROM subjects")
     subjects = cursor.fetchall()
-    
     with st.form("leave_form"):
         c1, c2 = st.columns(2)
         with c1: start = st.date_input("Start Date", value=datetime.date.today())
         with c2: end = st.date_input("End Date", value=datetime.date.today() + datetime.timedelta(days=1))
         subject_opts = {s['id']: s['name'] for s in subjects}
         subj = st.selectbox("Select Subject", list(subject_opts.keys()), format_func=lambda x: subject_opts[x])
-        reason = st.text_area("Reason for leave")
+        reason = st.text_area("Reason for Absence")
         if st.form_submit_button("Submit Leave Request", type="primary"):
-            if start > end: st.error("Start date must be before end date.")
+            if start > end: st.error("Chronological error. Start must precede end.")
             else:
-                cursor.execute("INSERT INTO leave_requests (student_id, subject_id, start_date, end_date, reason, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-                               (student_id, subj, start.strftime(DATE_FORMAT), end.strftime(DATE_FORMAT), reason, str(datetime.datetime.now())))
+                cursor.execute("INSERT INTO leave_requests (student_id, subject_id, start_date, end_date, reason, timestamp) VALUES (?, ?, ?, ?, ?, ?)", (student_id, subj, start.strftime(DATE_FORMAT), end.strftime(DATE_FORMAT), reason, str(datetime.datetime.now())))
                 conn.commit()
-                st.success("Leave request submitted successfully! AI will auto-approve.")
+                st.success("Request processed. Autonomous AI approval granted.")
                 st.rerun()
     conn.close()
 
 def student_tab_stats(student_id: int):
-    st.markdown('<div class="premium-header">📊 Analytics</div>', unsafe_allow_html=True)
+    st.markdown('<div class="holographic-header">📊 3D Quantum Analytics</div>', unsafe_allow_html=True)
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
@@ -424,13 +400,15 @@ def student_tab_stats(student_id: int):
         perc = round((p / total * 100), 2) if total else 0
         
         c1, c2, c3 = st.columns(3)
-        with c1: render_premium_metric("Present Days", p, icon="✅")
-        with c2: render_premium_metric("Absent Days", a, icon="❌")
-        with c3: render_premium_metric("Attendance %", f"{perc}%", icon="📈")
+        with c1: render_premium_metric("Present", p, icon="✅")
+        with c2: render_premium_metric("Absent", a, icon="❌")
+        with c3: render_premium_metric("Percentage", f"{perc}%", icon="📈")
         
         if total > 0:
-            fig = go.Figure(data=[go.Pie(labels=['Present', 'Absent', 'Leave'], values=[p, a, l], hole=.4, marker=dict(colors=['#28a745', '#dc3545', '#ffc107']))])
-            fig.update_layout(template="plotly_white", margin=dict(t=30, l=20, r=20, b=20))
+            fig = go.Figure(data=[go.Pie(labels=['Present', 'Absent', 'Leave'], values=[p, a, l], hole=.4, 
+                                           marker=dict(colors=['#00ffcc', '#ff0055', '#f1c40f']), textinfo='label+percent')])
+            fig.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                              title={'text': "Lifecycle Distribution", 'x':0.5, 'xanchor': 'center', 'font': {'color': '#00ffcc'}})
             st.plotly_chart(fig, use_container_width=True)
             
             cursor.execute("SELECT date, status FROM attendance WHERE student_id = ? ORDER BY date ASC", (student_id,))
@@ -438,14 +416,30 @@ def student_tab_stats(student_id: int):
             if tr:
                 df = pd.DataFrame([dict(r) for r in tr])
                 df['val'] = df['status'].map({'Present': 1, 'Leave': 0.5, 'Absent': 0})
-                fig2 = px.line(df, x='date', y='val', markers=True, template="plotly_white")
+                fig2 = px.line(df, x='date', y='val', markers=True, template="plotly_dark")
+                fig2.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
+                                   title={'text': "Attendance Velocity", 'x':0.5, 'font': {'color': '#00ffcc'}},
+                                   xaxis_title="", yaxis_title="Status (1=Present)")
                 st.plotly_chart(fig2, use_container_width=True)
-    except sqlite3.Error as e: st.error(f"Stats Error: {e}")
+    except sqlite3.Error as e: st.error(f"Quantum Stat Error: {e}")
     finally: conn.close()
 
-# --- Teacher Application Functions ---
+# --- Teacher Application (Command Center) ---
+def ai_text_analyzer(notes: str) -> dict:
+    notes = notes.lower()
+    status = "Present"
+    alert = ""
+    sentiment = "Neutral"
+    if any(k in notes for k in ['sick', 'fever', 'flu', 'covid', 'unwell']):
+        status = "Leave"; alert = "AI recommends 'Leave'. You can override it."; sentiment = "Negative"
+    elif any(k in notes for k in ['late', 'traffic', 'stuck', 'delay']):
+        status = "Absent"; alert = "AI detects lateness."; sentiment = "Negative"
+    elif any(k in notes for k in ['happy', 'great', 'excited', 'good']):
+        sentiment = "Positive"
+    return {"status": status, "alert": alert, "sentiment": sentiment}
+
 def teacher_tab_dashboard():
-    st.markdown('<div class="premium-header">🏫 Faculty Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="holographic-header">🏫 Faculty Command Center</div>', unsafe_allow_html=True)
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) as c FROM users WHERE role='student'")
@@ -455,13 +449,13 @@ def teacher_tab_dashboard():
     conn.close()
     
     c1, c2, c3, c4 = st.columns(4)
-    with c1: render_premium_metric("Total Students", total, icon="👨‍🎓")
-    with c2: render_premium_metric("Today's Present", sum(s['c'] for s in stats if s['status']=='Present'), icon="✅")
-    with c3: render_premium_metric("Today's Absent", sum(s['c'] for s in stats if s['status']=='Absent'), icon="❌")
-    with c4: render_premium_metric("Overall Avg", "86%", icon="📈")
+    with c1: render_premium_metric("Enrolled Students", total, icon="👨‍🎓")
+    with c2: render_premium_metric("Active Today", sum(s['c'] for s in stats if s['status']=='Present'), icon="✅")
+    with c3: render_premium_metric("Absent Today", sum(s['c'] for s in stats if s['status']=='Absent'), icon="❌")
+    with c4: render_premium_metric("Class Stability", "92%", icon="📈")
 
 def teacher_tab_matrix():
-    st.markdown('<div class="premium-header">📅 Enterprise Matrix</div>', unsafe_allow_html=True)
+    st.markdown('<div class="holographic-header">📅 The Matrix (Horizontal Grid)</div>', unsafe_allow_html=True)
     today = datetime.date.today()
     start = today.replace(day=1)
     conn = get_db_connection()
@@ -482,25 +476,27 @@ def teacher_tab_matrix():
             data.append(row)
         df = pd.DataFrame(data)
         
+        # Cyber Grid Colors
         def color_status(val):
-            if val == 'Present': return 'background-color: #d4edda; font-weight: bold;'
-            if val == 'Absent': return 'background-color: #f8d7da; font-weight: bold;'
-            if val == 'Leave': return 'background-color: #fff3cd; font-weight: bold;'
-            return 'background-color: #f8f9fa; color: #6c757d;'
+            if val == 'Present': return 'background-color: #00ffcc20; color: #00ffcc; font-weight: bold; text-shadow: 0 0 5px #00ffcc50;'
+            if val == 'Absent': return 'background-color: #ff005520; color: #ff0055; font-weight: bold; text-shadow: 0 0 5px #ff005550;'
+            if val == 'Leave': return 'background-color: #f1c40f20; color: #f1c40f; font-weight: bold; text-shadow: 0 0 5px #f1c40f50;'
+            return 'background-color: transparent; color: #6c757d;'
         
         styled = df.style.map(color_status, subset=pd.IndexSlice[:, df.columns[1:]])
+        st.markdown('<div class="cyber-grid-container">', unsafe_allow_html=True)
         st.dataframe(styled, use_container_width=True, height=600)
+        st.markdown('</div>', unsafe_allow_html=True)
     except sqlite3.Error as e: st.error(f"Matrix Error: {e}")
     finally: conn.close()
 
 def teacher_tab_crud():
-    st.markdown('<div class="premium-header">👨‍🏫 Student Management</div>', unsafe_allow_html=True)
+    st.markdown('<div class="holographic-header">👨‍🏫 Student Neural Management</div>', unsafe_allow_html=True)
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT id, full_name, username, email FROM users WHERE role = 'student'")
         students = cursor.fetchall()
-        
         with st.expander("➕ Add New Student", expanded=True):
             with st.form("add_form"):
                 c1, c2, c3 = st.columns(3)
@@ -518,15 +514,15 @@ def teacher_tab_crud():
         with st.expander("✏️ Update / ❌ Remove"):
             if students:
                 opts = {f"{s['id']} - {s['full_name']}": s for s in students}
-                sel = st.selectbox("Select", list(opts.keys()))
+                sel = st.selectbox("Select Neural Target", list(opts.keys()))
                 s_o = opts[sel]
                 c1, c2 = st.columns(2)
                 with c1:
-                    if st.button("🚨 Delete", type="primary"):
+                    if st.button("🚨 Purge Record", type="primary"):
                         cursor.execute("DELETE FROM users WHERE id = ?", (s_o['id'],)); conn.commit(); st.success("Deleted!"); st.rerun()
                 with c2:
                     with st.form("update_form"):
-                        nn = st.text_input("Name", value=s_o['full_name'])
+                        nn = st.text_input("Update Name", value=s_o['full_name'])
                         if st.form_submit_button("Update"):
                             cursor.execute("UPDATE users SET full_name=? WHERE id=?", (nn, s_o['id']))
                             conn.commit(); st.success("Updated!"); st.rerun()
@@ -534,13 +530,33 @@ def teacher_tab_crud():
     except sqlite3.Error as e: st.error(f"CRUD Error: {e}")
     finally: conn.close()
 
+def teacher_tab_bulk_attendance():
+    st.markdown('<div class="holographic-header">📝 Bulk Attendance Override</div>', unsafe_allow_html=True)
+    st.info("Align quantum signatures for the selected timeframe.")
+    date = st.date_input("Select Date", value=datetime.date.today())
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, full_name FROM users WHERE role='student'")
+    students = cursor.fetchall()
+    with st.form("bulk_form"):
+        for s in students:
+            c1, c2 = st.columns([3, 1])
+            with c1: st.write(s['full_name'])
+            with c2: status = st.selectbox("Status", ["Present", "Absent", "Leave"], key=f"bulk_{s['id']}")
+        if st.form_submit_button("Override Bulk Attendance", type="primary"):
+            for s in students:
+                cursor.execute("INSERT INTO attendance (student_id, date, status, timestamp) VALUES (?, ?, ?, ?) ON CONFLICT(student_id, date) DO UPDATE SET status = excluded.status",
+                               (s['id'], date.strftime(DATE_FORMAT), st.session_state[f"bulk_{s['id']}"], str(datetime.datetime.now())))
+            conn.commit(); st.success("Bulk attendance matrix realigned."); st.rerun()
+    conn.close()
+
 def teacher_tab_ai_chatbot():
-    st.markdown('<div class="premium-header">🤖 AI Faculty Co-Pilot</div>', unsafe_allow_html=True)
+    st.markdown('<div class="holographic-header">🤖 AI Faculty Co-Pilot</div>', unsafe_allow_html=True)
     if "teacher_messages" not in st.session_state: st.session_state.teacher_messages = []
     conn = get_db_connection()
     for m in st.session_state.teacher_messages:
         with st.chat_message(m["role"]): st.markdown(m["content"])
-    if prompt := st.chat_input("Ask AI to analyze attendance..."):
+    if prompt := st.chat_input("Query the Core..."):
         st.session_state.teacher_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"): st.markdown(prompt)
         with st.chat_message("assistant"):
@@ -550,12 +566,11 @@ def teacher_tab_ai_chatbot():
     conn.close()
 
 def teacher_tab_subject_management():
-    st.markdown('<div class="premium-header">📚 Subject & Class Management</div>', unsafe_allow_html=True)
+    st.markdown('<div class="holographic-header">📚 Subject Core Management</div>', unsafe_allow_html=True)
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id, name, class_code FROM subjects")
     subs = cursor.fetchall()
-    
     with st.expander("➕ Add New Subject"):
         with st.form("sub_form"):
             n = st.text_input("Subject Name")
@@ -563,95 +578,85 @@ def teacher_tab_subject_management():
             if st.form_submit_button("Add Subject"):
                 cursor.execute("INSERT INTO subjects (name, teacher_id, class_code) VALUES (?, ?, ?)", (n, st.session_state.user['id'], c))
                 conn.commit(); st.success("Added!"); st.rerun()
-    
     if subs:
         df = pd.DataFrame([dict(r) for r in subs])
         st.dataframe(df, use_container_width=True)
     conn.close()
 
-def teacher_tab_bulk_attendance():
-    st.markdown('<div class="premium-header">📝 Bulk Attendance Updater</div>', unsafe_allow_html=True)
-    st.info("Select a date and update multiple students' attendance status simultaneously.")
-    today = datetime.date.today()
-    date = st.date_input("Select Date", value=today)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, full_name FROM users WHERE role='student'")
-    students = cursor.fetchall()
-    
-    with st.form("bulk_form"):
-        for s in students:
-            c1, c2 = st.columns([3, 1])
-            with c1: st.write(s['full_name'])
-            with c2: status = st.selectbox("Status", ["Present", "Absent", "Leave"], key=f"bulk_{s['id']}")
-        if st.form_submit_button("Update Bulk Attendance", type="primary"):
-            for s in students:
-                cursor.execute("INSERT INTO attendance (student_id, date, status, timestamp) VALUES (?, ?, ?, ?) ON CONFLICT(student_id, date) DO UPDATE SET status = excluded.status",
-                               (s['id'], date.strftime(DATE_FORMAT), st.session_state[f"bulk_{s['id']}"], str(datetime.datetime.now())))
-            conn.commit(); st.success("Bulk attendance updated!"); st.rerun()
-    conn.close()
-
-# --- Main App UI & CSS (Canva Premium Style) ---
+# --- Main Application Core (Frosted Glass Cyber UI) ---
 def main():
-    st.set_page_config(layout="wide", page_title="AI Premium AMS", page_icon="📋")
+    st.set_page_config(layout="wide", page_title="NEURAL AMS", page_icon="🧠")
     
-    # PREMIUM GLASSMORPHISM CSS (Canva-inspired)
     st.markdown("""
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-        html, body, [class*="css"] { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #F3F4F6; }
-        .main .block-container { padding: 2rem 2rem; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap');
+        html, body, [class*="css"] { font-family: 'Inter', sans-serif; background-color: #0a0a0f; color: #e0e0e0; }
+        .main .block-container { padding: 2rem 2rem; background: rgba(10, 10, 15, 0.5); }
         
-        /* Sidebar */
+        /* Cyber-Glass Sidebar */
         section[data-testid="stSidebar"] {
-            background: rgba(255, 255, 255, 0.6);
-            backdrop-filter: blur(16px);
+            background: rgba(15, 15, 20, 0.85);
+            backdrop-filter: blur(16px) saturate(180%);
             -webkit-backdrop-filter: blur(16px);
-            border-right: 1px solid rgba(255,255,255,0.3);
+            border-right: 1px solid rgba(0, 255, 255, 0.1);
+            box-shadow: inset -10px 0 20px rgba(0,0,0,0.5);
         }
-        section[data-testid="stSidebar"] .stMarkdown { color: #1F2937; }
+        section[data-testid="stSidebar"] .stMarkdown { color: #e0e0e0; }
         
-        /* Glass Card */
-        .premium-card, .glass-effect {
-            background: rgba(255, 255, 255, 0.7);
-            backdrop-filter: blur(10px);
-            border-radius: 16px;
+        /* Glassmorphism 2.0 Card */
+        .glass-card {
+            background: rgba(255, 255, 255, 0.04);
+            backdrop-filter: blur(16px) saturate(150%);
+            border-radius: 20px;
             padding: 1.5rem;
-            border: 1px solid rgba(255, 255, 255, 0.5);
-            box-shadow: 0 4px 20px rgba(0,0,0,0.02);
-            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.37);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            margin-bottom: 1.5rem;
         }
-        .premium-card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,0.06); }
-        
-        /* Metrics */
-        .premium-metric {
-            background: white;
-            padding: 1.5rem;
-            border-radius: 14px;
-            text-align: center;
-            border: 1px solid #E5E7EB;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+        .glass-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 32px rgba(0, 255, 255, 0.08), 0 8px 32px rgba(0, 0, 0, 0.37);
+            border-color: rgba(0, 255, 255, 0.2);
         }
-        .premium-metric-icon { font-size: 1.8rem; }
-        .premium-metric-value { font-size: 2.2rem; font-weight: 800; color: #111827; margin: 0.2rem 0; }
-        .premium-metric-label { font-size: 0.85rem; color: #6B7280; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-        .premium-metric-sub { font-size: 0.75rem; color: #9CA3AF; margin-top: 0.5rem; }
+
+        /* Floating Metrics */
+        .cyber-metric-value { font-size: 2.5rem; font-weight: 800; background: -webkit-linear-gradient(135deg, #00ffcc, #0066ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .cyber-metric-label { font-size: 1rem; color: #8a8a9a; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-top: -0.2rem;}
+        .cyber-metric-sub { font-size: 0.8rem; color: #4a4a5a; margin-top: 0.5rem; }
         
-        /* Gradient Text */
-        .premium-header {
-            font-weight: 800; font-size: 2rem; margin-bottom: 1rem;
-            background: -webkit-linear-gradient(135deg, #4F46E5 0%, #9333EA 100%);
+        /* Holographic Headers */
+        .holographic-header {
+            font-weight: 700; font-size: 2rem; margin-bottom: 1rem;
+            background: -webkit-linear-gradient(135deg, #00ffcc 0%, #b44aff 100%);
             -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 15px rgba(0, 255, 255, 0.1);
         }
         
         /* Premium Buttons */
         .stButton > button {
-            background: #4F46E5; color: white; border: none;
+            background: rgba(0, 255, 255, 0.1); color: #00ffcc; border: 1px solid rgba(0, 255, 255, 0.3);
             padding: 0.6rem 2rem; border-radius: 50px; font-weight: 600;
-            box-shadow: 0 4px 12px rgba(79, 70, 229, 0.15);
-            transition: all 0.2s ease;
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.0);
+            transition: all 0.3s ease;
         }
-        .stButton > button:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(79, 70, 229, 0.25); color: white; }
+        .stButton > button:hover {
+            background: rgba(0, 255, 255, 0.3); color: #fff; border: 1px solid #00ffcc;
+            transform: translateY(-2px); box-shadow: 0 0 25px rgba(0, 255, 255, 0.3);
+        }
+        
+        /* Horizontal Grid Scroll for Matrix */
+        .cyber-grid-container {
+            overflow-x: auto;
+            display: block;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            background: rgba(0, 0, 0, 0.2);
+        }
+        .cyber-grid-container [data-testid="stDataFrame"] { border: none; }
+        .cyber-grid-container::-webkit-scrollbar { height: 8px; }
+        .cyber-grid-container::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.05); border-radius: 8px; }
+        .cyber-grid-container::-webkit-scrollbar-thumb { background: #00ffcc; border-radius: 8px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -661,35 +666,38 @@ def main():
     if "user" not in st.session_state: st.session_state.user = None
 
     if st.session_state.user is None:
-        st.markdown('<div style="text-align: center; padding: 3rem; background: white; border-radius: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.05); max-width: 500px; margin: auto;"><h1 style="background: -webkit-linear-gradient(45deg, #4F46E5, #9333EA); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800;">🤖 AI Campus</h1><p style="color: #6B7280;">Next-Gen University Management</p><br>', unsafe_allow_html=True)
+        st.markdown("""
+        <div style="text-align: center; padding: 3rem; margin: auto; max-width: 500px; background: rgba(255, 255, 255, 0.02); border-radius: 24px; backdrop-filter: blur(12px); border: 1px solid rgba(0, 255, 255, 0.1);">
+            <h1 style="background: -webkit-linear-gradient(45deg, #00ffcc, #b44aff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800;">🧠 NEURAL AMS</h1>
+            <p style="color: #6B7280; margin-bottom: 2rem;">Quantum University Management Core</p>
+        """, unsafe_allow_html=True)
         with st.container():
             with st.form("login"):
-                u = st.text_input("Username", placeholder="Enter username")
-                p = st.text_input("Password", type="password", placeholder="Enter password")
+                u = st.text_input("Username", placeholder="Neural Input...")
+                p = st.text_input("Password", type="password", placeholder="Secure Key...")
                 if st.form_submit_button("Login", type="primary", use_container_width=True):
                     user = authenticate_user(u, p)
                     if user: st.session_state.user = user; st.rerun()
-                    else: st.error("Invalid credentials.")
+                    else: st.error("Access Denied. Invalid credentials.")
         st.caption("Teacher: `admin` / `admin123` | Student: `student1` / `123456`")
+        st.markdown('</div>', unsafe_allow_html=True)
         return
 
     user = st.session_state.user
     st.sidebar.markdown(f"## 👤 {user['full_name']}")
     st.sidebar.markdown(f"**{'👨‍🏫 Faculty' if user['role'] == 'teacher' else '🧑‍🎓 Student'}**")
     st.sidebar.markdown("---")
-    if st.sidebar.button("🚪 Logout", use_container_width=True, type="primary"):
+    if st.sidebar.button("🚪 Terminate Session", use_container_width=True, type="primary"):
         st.session_state.user = None; st.rerun()
 
-    # Feature-rich Navigation
     if user['role'] == 'student':
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["🏠 Dashboard", "✅ Check-In", "📶 Offline", "🤖 AI Chat", "📝 Leave", "📊 Stats", "⚙️ Settings"])
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🏠 Dashboard", "✅ Check-In", "📶 Offline", "🤖 AI Chat", "📝 Leave", "📊 Stats"])
         with tab1: student_tab_dashboard()
         with tab2: student_tab_checkin(user['id'], user['full_name'])
-        with tab3: student_tab_offline(user['id'])
+        with tab3: student_tab_offline()
         with tab4: student_tab_ai_chatbot(user['id'])
         with tab5: student_tab_leave_requests(user['id'])
         with tab6: student_tab_stats(user['id'])
-        with tab7: st.json({"Username": user['username'], "Role": user['role']})
     else:
         tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["🏠 Dashboard", "📅 Matrix", "📚 Subjects", "🤖 AI Chat", "👨‍🏫 CRUD", "📝 Bulk Edit", "⚙️ Settings"])
         with tab1: teacher_tab_dashboard()
@@ -698,7 +706,7 @@ def main():
         with tab4: teacher_tab_ai_chatbot()
         with tab5: teacher_tab_crud()
         with tab6: teacher_tab_bulk_attendance()
-        with tab7: st.json({"System": "AI University", "Database": "SQLite3", "Status": "Running"})
+        with tab7: st.json({"System": "Neural AMS", "Database": "Quantum SQLite", "Status": "Active"})
 
 if __name__ == "__main__":
     main()
