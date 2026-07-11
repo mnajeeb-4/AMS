@@ -667,7 +667,7 @@ def main():
         st.markdown("""
         <div class="login-glass-card" style="text-align: center; padding: 3rem; margin: auto; max-width: 500px;">
             <h1 style="background: -webkit-linear-gradient(45deg, #00ffcc, #b44aff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800; font-size: 2.5rem; margin-bottom: 0.5rem;">🧠 ATTENDANCE MANGEMENT SYSTEM</h1>
-            <p style="color: #9CA3AF; margin-bottom: 2rem; font-size: 0.9rem; letter-spacing: 0.5px;">ATTENDANCE Management SYSTEM" Core</p>
+            <p style="color: #9CA3AF; margin-bottom: 2rem; font-size: 0.9rem; letter-spacing: 0.5px;">ATTENDANCE Management SYSTEM </p>
         """, unsafe_allow_html=True)
         with st.container():
             with st.form("login"):
